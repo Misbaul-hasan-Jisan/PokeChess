@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pokémon Chess (upgraded)</title>
+  <style>
+    :root{
+      --light:#f0d9b5;
+      --dark:#b58863;
+      --board-size:640px;
+      --square-size:calc(var(--board-size)/8);
+      --accent:#1f6feb;
+    }
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;margin:20px;background:#0f172a;color:#e6eef8;display:flex;gap:20px;align-items:flex-start}
+    .wrap{display:flex;gap:20px}
+    #boardContainer{width:var(--board-size);background:linear-gradient(180deg,#0b1220, #071021);padding:14px;border-radius:14px;box-shadow:0 10px 30px rgba(2,6,23,.6)}
+    #board{width:var(--board-size);height:var(--board-size);display:grid;grid-template-columns:repeat(8,1fr);grid-auto-rows:var(--square-size);border-radius:8px;overflow:hidden}
+    .board-square{position:relative;display:flex;align-items:center;justify-content:center;user-select:none}
+    .square-light{background:var(--light);}
+    .square-dark{background:var(--dark);}
+    .coord{position:absolute;font-size:12px;color:rgba(0,0,0,.6);font-weight:600}
+    .coord.rank{left:4px;top:4px}
+    .coord.file{right:4px;bottom:4px}
+    .piece{width:72%;height:72%;object-fit:contain;pointer-events:none;filter:drop-shadow(0 6px 10px rgba(2,6,23,.5))}
+    .board-square.selected{outline:3px solid rgba(31,111,235,.9);box-shadow:inset 0 0 0 2px rgba(255,255,255,.05)}
+    .legal-move-empty .hint{width:16px;height:16px;border-radius:50%;background:rgba(31,111,235,.9);opacity:1}
+    .hint{position:absolute;opacity:0;transition:opacity .12s}
+    .legal-move-capture{box-shadow:inset 0 0 0 3px rgba(255,80,80,.95);}
+
+    /* panels */
+    .sidebar{width:360px}
+    .panel{background:linear-gradient(180deg,#071028,#071021);padding:14px;border-radius:12px;box-shadow:0 8px 20px rgba(2,6,23,.6)}
+    #legend{display:flex;flex-wrap:wrap;gap:8px;padding:8px}
+    .legend-item{display:flex;gap:8px;align-items:center;background:linear-gradient(90deg, rgba(255,255,255,.02), transparent);padding:6px 8px;border-radius:8px}
+    .legend-item img{width:36px;height:36px;object-fit:contain}
+    .legend-text .title{font-weight:700;font-size:13px}
+    .legend-text .subtitle{font-size:12px;color:#9fb0d6}
+    .controls{display:flex;gap:8px;margin-bottom:12px}
+    button{background:var(--accent);border:none;color:white;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
+    .muted{background:transparent;border:1px solid rgba(255,255,255,.04);color:#9fb0d6}
+
+    #moves{height:340px;overflow:auto;background:linear-gradient(180deg,#061126,#071021);padding:8px;border-radius:8px}
+    .move-row{display:flex;gap:8px;padding:6px;border-bottom:1px solid rgba(255,255,255,.02)}
+    .move-num{width:32px;color:#9fb0d6}
+    .move-white,.move-black{flex:1}
+    .indicators{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+    .indicator{padding:8px;border-radius:8px;background:rgba(255,255,255,.02)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="boardContainer">
+      <div id="board"></div>
+    </div>
+
+    <div class="sidebar">
+      <div class="panel">
+        <div class="controls">
+          <button id="undoBtn" class="muted">Undo</button>
+          <button id="flipBtn" class="muted">Flip</button>
+          <button id="restartBtn">Restart</button>
+        </div>
+        <div class="indicators">
+          <div class="indicator">Turn: <span id="turnIndicator">White</span></div>
+          <div class="indicator">Status: <span id="statusIndicator">Playing</span></div>
+        </div>
+        <div id="moves"></div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="panel" id="legend"></div>
+    </div>
+  </div>
+
+  <script>
+    // ---- Higher res Pokémon artwork where possible ----
+    const pokemonImages = {
+      w: {
+        p: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png',
+        r: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/6.png',
+        n: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/133.png',
+        b: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/1.png',
+        q: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/150.png',
+        k: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/143.png',
+      },
+      b: {
+        // fallback to shiny tiny sprites for 'black' (visually distinct)
+        p: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/25.png',
+        r: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/6.png',
+        n: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/133.png',
+        b: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/1.png',
+        q: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/150.png',
+        k: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/143.png',
+      }
+    };
+
+    const pokemonNames = { p: 'Pikachu', r: 'Charizard', n: 'Eevee', b: 'Bulbasaur', q: 'Mewtwo', k: 'Snorlax' };
+
+    // ------- Chess engine -------
+    class ChessGame {
+      constructor(){ this.reset(); }
+      reset(){
+        this.board = Array(8).fill().map(()=>Array(8).fill(null));
+        this.turn = 'w';
+        this.history = []; // array of move objects {from,to,san,fen}
+        this.status = 'playing';
+        this.castlingRights = { w:{kingside:true,queenside:true}, b:{kingside:true,queenside:true} };
+        this.enPassantTarget = null;
+        this.halfMoveClock = 0;
+        this.fullMoveNumber = 1;
+
+        const setup = [
+          ['r','n','b','q','k','b','n','r'],
+          ['p','p','p','p','p','p','p','p'],
+          [null,null,null,null,null,null,null,null],
+          [null,null,null,null,null,null,null,null],
+          [null,null,null,null,null,null,null,null],
+          [null,null,null,null,null,null,null,null],
+          ['P','P','P','P','P','P','P','P'],
+          ['R','N','B','Q','K','B','N','R']
+        ];
+
+        for(let r=0;r<8;r++){
+          for(let f=0;f<8;f++){
+            const piece = setup[r][f];
+            if(piece){
+              this.board[r][f] = { type: piece.toLowerCase(), color: piece===piece.toUpperCase()? 'w':'b', hasMoved:false };
+            }
+          }
+        }
+        // push initial fen into history baseline so undo can restore
+        this.history = [];
+      }
+
+      // parse and helpers
+      parseSquare(square){ return { file: square.charCodeAt(0)-97, rank: 8-parseInt(square[1]) } }
+      toSquare(file,rank){ return String.fromCharCode(97+file) + (8-rank) }
+      get(square){ const {file,rank} = this.parseSquare(square); return this.board[rank][file]; }
+      isInBounds(file,rank){ return file>=0 && file<8 && rank>=0 && rank<8 }
+
+      // --- move generation (same logic but slightly cleaned) ---
+      moves({square,verbose}){
+        const {file,rank} = this.parseSquare(square);
+        const piece = this.board[rank][file];
+        if(!piece || piece.color !== this.turn) return [];
+        let moves = [];
+        switch(piece.type){
+          case 'p': this.getPawnMoves(file,rank,piece.color,moves); break;
+          case 'r': this.getRookMoves(file,rank,piece.color,moves); break;
+          case 'n': this.getKnightMoves(file,rank,piece.color,moves); break;
+          case 'b': this.getBishopMoves(file,rank,piece.color,moves); break;
+          case 'q': this.getRookMoves(file,rank,piece.color,moves); this.getBishopMoves(file,rank,piece.color,moves); break;
+          case 'k': this.getKingMoves(file,rank,piece.color,moves); break;
+        }
+        moves = moves.filter((to)=>this.isLegalMove(square,to));
+        if(verbose){ return moves.map((to)=>({ from:square, to, piece:piece.type, color:piece.color})); }
+        return moves;
+      }
+
+      // Simulate move to check legality
+      isLegalMove(from,to){
+        const {file:fromFile,rank:fromRank} = this.parseSquare(from);
+        const {file:toFile,rank:toRank} = this.parseSquare(to);
+        const piece = this.board[fromRank][fromFile];
+        if(!piece) return false;
+
+        const backupFrom = this.board[fromRank][fromFile];
+        const backupTo = this.board[toRank][toFile];
+        const enPassantBackup = this.enPassantTarget;
+        const castlingBackup = JSON.parse(JSON.stringify(this.castlingRights));
+
+        // apply move
+        this.board[toRank][toFile] = piece;
+        this.board[fromRank][fromFile] = null;
+        let enPassantCapture = false;
+        if(piece.type==='p' && this.enPassantTarget === to){
+          const epRank = piece.color==='w'? toRank+1: toRank-1;
+          this.board[epRank][toFile] = null;
+          enPassantCapture = true;
+        }
+
+        const inCheck = this.isInCheck(piece.color);
+
+        // revert
+        this.board[fromRank][fromFile] = backupFrom;
+        this.board[toRank][toFile] = backupTo;
+        if(enPassantCapture){ const epRank = piece.color==='w'? toRank+1: toRank-1; this.board[epRank][toFile] = { type:'p', color: piece.color==='w'?'b':'w', hasMoved:true } }
+        this.enPassantTarget = enPassantBackup;
+        this.castlingRights = castlingBackup;
+
+        return !inCheck;
+      }
+
+      isInCheck(color){
+        // locate king
+        let kp = null;
+        for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const p = this.board[r][f]; if(p && p.type==='k' && p.color===color){ kp={file:f,rank:r}; break; } }
+        if(!kp) return false;
+        const attacker = color==='w'? 'b':'w';
+        for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const p=this.board[r][f]; if(p && p.color===attacker){ if(this.pseudoLegalMovesForPiece(f,r,p).some(m=>m.file===kp.file && m.rank===kp.rank)) return true }}
+        return false;
+      }
+
+      pseudoLegalMovesForPiece(file,rank,piece){
+        switch(piece.type){
+          case 'p': return this.pawnAttackSquares(file,rank,piece.color);
+          case 'r': return this.getSlidingSquares(file,rank,piece.color,[[1,0],[-1,0],[0,1],[0,-1]]);
+          case 'b': return this.getSlidingSquares(file,rank,piece.color,[[1,1],[1,-1],[-1,1],[-1,-1]]);
+          case 'q': return [...this.getSlidingSquares(file,rank,piece.color,[[1,0],[-1,0],[0,1],[0,-1]]), ...this.getSlidingSquares(file,rank,piece.color,[[1,1],[1,-1],[-1,1],[-1,-1]])];
+          case 'n': return this.knightSquares(file,rank,piece.color);
+          case 'k': return this.kingSquares(file,rank,piece.color);
+        }
+        return [];
+      }
+
+      // pawn moves
+      getPawnMoves(file,rank,color,moves){
+        const dir = color==='w' ? -1:1;
+        const start = color==='w'?6:1; const enemy = color==='w'?'b':'w';
+        const one = rank+dir;
+        if(this.isInBounds(file,one) && !this.board[one][file]){ moves.push(this.toSquare(file,one));
+          const two = rank + 2*dir; if(rank===start && this.isInBounds(file,two) && !this.board[two][file]) moves.push(this.toSquare(file,two));
+        }
+        for(const df of [-1,1]){ const cf = file+df; if(!this.isInBounds(cf,one)) continue; const target = this.board[one][cf]; if(target && target.color===enemy) moves.push(this.toSquare(cf,one)); else if(this.enPassantTarget === this.toSquare(cf,one)) moves.push(this.toSquare(cf,one)); }
+      }
+      pawnAttackSquares(file,rank,color){ const dir = color==='w'? -1:1; let out=[]; for(const df of [-1,1]){ const f=file+df, r=rank+dir; if(this.isInBounds(f,r)) out.push({file:f,rank:r}) } return out }
+
+      // sliding
+      getRookMoves(file,rank,color,moves){ this.getSlidingMoves(file,rank,color,[[1,0],[-1,0],[0,1],[0,-1]],moves) }
+      getBishopMoves(file,rank,color,moves){ this.getSlidingMoves(file,rank,color,[[1,1],[1,-1],[-1,1],[-1,-1]],moves) }
+      getSlidingMoves(file,rank,color,directions,moves){ for(const [dx,dy] of directions){ let f=file+dx,r=rank+dy; while(this.isInBounds(f,r)){ const t=this.board[r][f]; if(t && t.type==='k' && t.color!==color) break; if(!t) moves.push(this.toSquare(f,r)); else { if(t.color!==color) moves.push(this.toSquare(f,r)); break } f+=dx; r+=dy } } }
+      getSlidingSquares(file,rank,color,directions){ let out=[]; for(const [dx,dy] of directions){ let f=file+dx,r=rank+dy; while(this.isInBounds(f,r)){ const t=this.board[r][f]; if(t && t.color===color) break; out.push({file:f,rank:r}); if(t) break; f+=dx; r+=dy } } return out }
+
+      // knights
+      getKnightMoves(file,rank,color,moves){ const jumps=[[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]]; for(const [dx,dy] of jumps){ const f=file+dx,r=rank+dy; if(!this.isInBounds(f,r)) continue; const t=this.board[r][f]; if(t && t.type==='k' && t.color!==color) continue; if(!t || t.color!==color) moves.push(this.toSquare(f,r)) } }
+      knightSquares(file,rank,color){ const jumps=[[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]]; let out=[]; for(const [dx,dy] of jumps){ const f=file+dx,r=rank+dy; if(this.isInBounds(f,r)){ const t=this.board[r][f]; if(!t || t.color!==color) out.push({file:f,rank:r}) } } return out }
+
+      // king
+      getKingMoves(file,rank,color,moves){ for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx===0 && dy===0) continue; const f=file+dx,r=rank+dy; if(!this.isInBounds(f,r)) continue; const t=this.board[r][f]; if(t && t.type==='k' && t.color!==color) continue; if(!t || t.color!==color) moves.push(this.toSquare(f,r)); }
+        // castling
+        if(this.canCastle(color,'kingside')){
+          if(!this.board[rank][file+1] && !this.board[rank][file+2] && !this.isSquareAttacked(this.toSquare(file,rank), color==='w'?'b':'w') && !this.isSquareAttacked(this.toSquare(file+1,rank), color==='w'?'b':'w') && !this.isSquareAttacked(this.toSquare(file+2,rank), color==='w'?'b':'w')) moves.push(this.toSquare(file+2,rank));
+        }
+        if(this.canCastle(color,'queenside')){
+          if(!this.board[rank][file-1] && !this.board[rank][file-2] && !this.board[rank][file-3] && !this.isSquareAttacked(this.toSquare(file,rank), color==='w'?'b':'w') && !this.isSquareAttacked(this.toSquare(file-1,rank), color==='w'?'b':'w') && !this.isSquareAttacked(this.toSquare(file-2,rank), color==='w'?'b':'w')) moves.push(this.toSquare(file-2,rank));
+        }
+      }
+      kingSquares(file,rank,color){ let out=[]; for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx===0 && dy===0) continue; const f=file+dx,r=rank+dy; if(this.isInBounds(f,r)){ const t=this.board[r][f]; if(!t || t.color!==color) out.push({file:f,rank:r}) } } return out }
+
+      isSquareAttacked(square,attackerColor){ const {file,rank} = this.parseSquare(square); for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const p=this.board[r][f]; if(p && p.color===attackerColor){ const attacks = this.pseudoLegalMovesForPiece(f,r,p); if(attacks.some(m=>m.file===file && m.rank===rank)) return true } } return false }
+
+      canCastle(color,side){ if(!this.castlingRights[color]) return false; return side==='kingside' ? this.castlingRights[color].kingside : this.castlingRights[color].queenside }
+
+      // --- move execution with SAN + history and undo support ---
+      move({from,to,promotion}){
+        const {file:fromFile,rank:fromRank} = this.parseSquare(from);
+        const {file:toFile,rank:toRank} = this.parseSquare(to);
+        const piece = this.board[fromRank][fromFile];
+        if(!piece || piece.color !== this.turn) return false;
+
+        const legalMoves = this.moves({square:from});
+        if(!legalMoves.includes(to)) return false;
+
+        // determine capture
+        const target = this.board[toRank][toFile];
+        const isEnPassant = piece.type==='p' && this.enPassantTarget === to;
+        const captured = isEnPassant ? this.board[ fromRank ][ toFile ] : target;
+
+        // handle castling
+        let san = '';
+        if(piece.type==='k' && Math.abs(toFile-fromFile)===2){
+          san = toFile>fromFile ? 'O-O' : 'O-O-O';
+          // execute castle
+          if(toFile>fromFile){ // kingside
+            this.board[toRank][toFile] = piece; this.board[fromRank][fromFile]=null;
+            const rook = this.board[fromRank][7]; this.board[fromRank][5]=rook; this.board[fromRank][7]=null; if(rook) rook.hasMoved=true;
+          } else {
+            this.board[toRank][toFile]=piece; this.board[fromRank][fromFile]=null; const rook = this.board[fromRank][0]; this.board[fromRank][3]=rook; this.board[fromRank][0]=null; if(rook) rook.hasMoved=true;
+          }
+          piece.hasMoved=true;
+          this.afterMoveUpdates(from,to,piece);
+        } else if(isEnPassant){
+          // en passant capture
+          this.board[toRank][toFile] = piece; this.board[fromRank][fromFile]=null; const epRank = piece.color==='w'? toRank+1: toRank-1; this.board[epRank][toFile]=null; piece.hasMoved=true; this.afterMoveUpdates(from,to,piece);
+        } else {
+          // normal
+          this.board[toRank][toFile] = piece;
+          this.board[fromRank][fromFile] = null;
+          // promotion
+          if(piece.type==='p'){
+            const promoRank = piece.color==='w'? 0:7;
+            if(toRank===promoRank){ const ptype = promotion||'q'; this.board[toRank][toFile] = { type: ptype, color: piece.color, hasMoved:true }; piece.hasMoved=true; }
+          }
+          piece.hasMoved=true;
+          this.afterMoveUpdates(from,to,piece);
+        }
+
+        // Generate SAN if not castle
+        if(!san){
+          san = this.generateSAN(from,to, piece, captured, promotion, isEnPassant);
+        }
+
+        // Save history entry with resulting FEN for easy restore
+        this.history.push({ from,to,san,fen:this.getFEN() });
+        return true;
+      }
+
+      // undo by restoring previous FEN (or starting position)
+      undo(){ if(this.history.length===0) return false; this.history.pop(); const prevFen = this.history.length>0 ? this.history[this.history.length-1].fen : this.getInitialFEN(); this.loadFEN(prevFen); return true }
+      getHistory(){ return this.history }
+
+      getInitialFEN(){
+        // construct FEN for starting position quickly
+        return 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+      }
+
+      // simple SAN generator (not full disambiguation, but good for casual use)
+      generateSAN(from,to,piece,captured,promotion,isEnPassant){
+        // castling handled earlier
+        const pieceLetter = piece.type==='p' ? '' : (piece.type==='n' ? 'N' : piece.type.toUpperCase());
+        let captureMark = captured || isEnPassant ? 'x' : '';
+        // pawn captures include file of origin
+        let prefix = '';
+        if(piece.type==='p' && captureMark){ prefix = from[0]; }
+        let dst = to;
+        let promoText = promotion ? '='+promotion.toUpperCase() : '';
+
+        // apply check/checkmate markers by simulating the move and checking resulting state
+        // We'll temporarily apply move
+        const {file:fromFile,rank:fromRank} = this.parseSquare(from);
+        const {file:toFile,rank:toRank} = this.parseSquare(to);
+        const backupFrom = this.board[fromRank][fromFile];
+        const backupTo = this.board[toRank][toFile];
+        this.board[toRank][toFile] = backupFrom;
+        this.board[fromRank][fromFile] = null;
+        const enemy = this.turn==='w' ? 'b' : 'w';
+        const check = this.isInCheck(enemy);
+        const mate = check && this.getAllLegalMoves(enemy).length===0;
+        // revert
+        this.board[fromRank][fromFile] = backupFrom;
+        this.board[toRank][toFile] = backupTo;
+
+        const suffix = mate ? '#' : (check? '+' : '');
+        return prefix + pieceLetter + captureMark + dst + promoText + suffix;
+      }
+
+      afterMoveUpdates(from,to,piece){
+        // reset en passant
+        // update castling rights
+        const {file:fromFile,rank:fromRank} = this.parseSquare(from);
+        const {file:toFile,rank:toRank} = this.parseSquare(to);
+
+        if(piece.type==='k'){
+          this.castlingRights[piece.color].kingside = false;
+          this.castlingRights[piece.color].queenside = false;
+        } else if(piece.type==='r'){
+          if(fromFile===0) this.castlingRights[piece.color].queenside = false;
+          else if(fromFile===7) this.castlingRights[piece.color].kingside = false;
+        }
+
+        // en passant target
+        if(piece.type==='p' && Math.abs(toRank - fromRank) === 2){ const epRank = (fromRank+toRank)/2; this.enPassantTarget = this.toSquare(toFile, epRank); } else this.enPassantTarget = null;
+
+        // halfmove clock
+        if(piece.type==='p' || this.board[toRank][toFile] !== null) this.halfMoveClock = 0; else this.halfMoveClock++;
+        if(this.turn==='b') this.fullMoveNumber++;
+
+        // switch turn
+        this.turn = this.turn==='w' ? 'b' : 'w';
+
+        // update status
+        if(this.isInCheck(this.turn) && this.getAllLegalMoves(this.turn).length===0) this.status='checkmate';
+        else if(!this.isInCheck(this.turn) && this.getAllLegalMoves(this.turn).length===0) this.status='stalemate';
+        else this.status='playing';
+      }
+
+      getAllLegalMoves(color){ let out=[]; for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const p=this.board[r][f]; if(p && p.color===color){ const ms=this.moves({square:this.toSquare(f,r)}); if(ms.length) out.push(...ms.map(to=>({from:this.toSquare(f,r),to}))); } } return out }
+
+      // Simple FEN generator/loader (keeps basic fields - suitable for undo/restore)
+      getFEN(){ let fen=''; for(let r=0;r<8;r++){ let empty=0; for(let f=0;f<8;f++){ const p=this.board[r][f]; if(!p) empty++; else { if(empty>0){ fen+=empty; empty=0 } fen += p.color==='w'? p.type.toUpperCase(): p.type; } } if(empty>0) fen+=empty; if(r!==7) fen+='/'; }
+        fen += ' ' + this.turn;
+        fen += ' ' + (this.castlingRights.w.kingside?'K':'') + (this.castlingRights.w.queenside?'Q':'') + (this.castlingRights.b.kingside?'k':'') + (this.castlingRights.b.queenside?'q':'');
+        fen += ' ' + (this.enPassantTarget || '-');
+        fen += ' ' + this.halfMoveClock + ' ' + this.fullMoveNumber;
+        return fen;
+      }
+
+      loadFEN(fen){ // basic fen parser that we produce
+        const parts = fen.split(' ');
+        const rows = parts[0].split('/');
+        this.board = Array(8).fill().map(()=>Array(8).fill(null));
+        for(let r=0;r<8;r++){ const row = rows[r]; let f=0; for(const ch of row){ if(/[1-8]/.test(ch)){ f += parseInt(ch); } else { const isUpper = ch === ch.toUpperCase(); const type = ch.toLowerCase(); this.board[r][f] = { type, color: isUpper ? 'w' : 'b', hasMoved: true }; f++; } } }
+        this.turn = parts[1];
+        const cast = parts[2]; this.castlingRights = { w:{kingside:false,queenside:false}, b:{kingside:false,queenside:false} };
+        if(cast.includes('K')) this.castlingRights.w.kingside=true; if(cast.includes('Q')) this.castlingRights.w.queenside=true; if(cast.includes('k')) this.castlingRights.b.kingside=true; if(cast.includes('q')) this.castlingRights.b.queenside=true;
+        this.enPassantTarget = parts[3]==='-'? null: parts[3]; this.halfMoveClock = parseInt(parts[4]); this.fullMoveNumber = parseInt(parts[5]);
+        // derive status
+        if(this.isInCheck(this.turn) && this.getAllLegalMoves(this.turn).length===0) this.status='checkmate'; else if(!this.isInCheck(this.turn) && this.getAllLegalMoves(this.turn).length===0) this.status='stalemate'; else this.status='playing';
+      }
+
+    }
+
+    // ---- UI and rendering ----
+    const game = new ChessGame();
+    let selectedSquare = null; let legalMoves = []; let boardFlipped = false;
+    const boardEl = document.getElementById('board'); const movesEl = document.getElementById('moves'); const turnIndicator = document.getElementById('turnIndicator'); const statusIndicator = document.getElementById('statusIndicator'); const undoBtn = document.getElementById('undoBtn'); const flipBtn = document.getElementById('flipBtn'); const restartBtn = document.getElementById('restartBtn'); const legendEl = document.getElementById('legend');
+
+    function generateSquareList(){ const files=['a','b','c','d','e','f','g','h']; const ranks=['8','7','6','5','4','3','2','1']; let arr=[]; for(let r=0;r<8;r++) for(let f=0;f<8;f++) arr.push(files[f]+ranks[r]); return arr }
+
+    function renderBoard(){ boardEl.innerHTML=''; const squaresList = generateSquareList(); const orientation = boardFlipped ? [...squaresList].reverse() : squaresList; orientation.forEach(sq=>{ const squareDiv = document.createElement('div'); squareDiv.className = `board-square ${ isSquareLight(sq) ? 'square-light':'square-dark'}`; squareDiv.dataset.square = sq;
+        const file = sq[0], rank = sq[1]; const isLeftColumn = (boardFlipped && file==='h') || (!boardFlipped && file==='a'); const isBottomRow = (boardFlipped && rank==='1') || (!boardFlipped && rank==='1');
+        if(isLeftColumn){ const label=document.createElement('div'); label.className='coord rank'; label.textContent=rank; squareDiv.appendChild(label); }
+        if(isBottomRow){ const fLabel=document.createElement('div'); fLabel.className='coord file'; fLabel.textContent=file; squareDiv.appendChild(fLabel); }
+        const piece = game.get(sq);
+        if(piece){ const pieceImg = createPieceElement(piece); squareDiv.appendChild(pieceImg); }
+        const hint=document.createElement('div'); hint.className='hint'; squareDiv.appendChild(hint);
+        squareDiv.addEventListener('click',()=>handleSquareClick(sq)); boardEl.appendChild(squareDiv);
+    }); updateHighlights(); renderMoveList(); updateIndicators(); }
+
+    function createPieceElement(piece){ const img=document.createElement('img'); img.src = pokemonImages[piece.color][piece.type]; img.className='piece'; img.alt = `${piece.color==='w'?'White':'Black'} ${pokemonNames[piece.type]}`; img.draggable=false; return img }
+    function isSquareLight(square){ const file = square.charCodeAt(0)-'a'.charCodeAt(0); const rank = parseInt(square[1]) - 1; return (file+rank)%2===0 }
+
+    function handleSquareClick(square){
+      if(selectedSquare && legalMoves.some(m=> m.to===square || m===square)){
+        const move = { from:selectedSquare, to:square, promotion:'q' };
+        if(game.move(move)){
+          selectedSquare=null; legalMoves=[]; renderBoard(); return;
+        }
+      }
+      const piece = game.get(square);
+      if(piece && piece.color===game.turn){ selectedSquare = square; legalMoves = game.moves({square:square, verbose:true}); } else { selectedSquare=null; legalMoves=[]; }
+      updateHighlights();
+    }
+
+    function updateHighlights(){ document.querySelectorAll('.board-square').forEach(sqEl=>{ const sq = sqEl.dataset.square; const hint = sqEl.querySelector('.hint'); if(hint) hint.style.opacity='0'; sqEl.classList.remove('selected','legal-move-empty','legal-move-capture'); if(sq===selectedSquare) sqEl.classList.add('selected'); if(legalMoves.some(m=> m.to===sq || m===sq)){
+        if(!game.get(sq)){ sqEl.classList.add('legal-move-empty'); if(hint) hint.style.opacity='1' } else sqEl.classList.add('legal-move-capture'); }
+    }); }
+
+    function renderMoveList(){ const history = game.getHistory(); movesEl.innerHTML=''; for(let i=0;i<history.length;i+=2){ const moveNum = Math.floor(i/2)+1; const whiteMove = history[i] ? history[i].san : ''; const blackMove = history[i+1] ? history[i+1].san : ''; const row=document.createElement('div'); row.className='move-row'; row.innerHTML = `<div class="move-num">${moveNum}.</div><div class="move-white">${whiteMove}</div><div class="move-black">${blackMove}</div>`; movesEl.appendChild(row); } movesEl.scrollTop = movesEl.scrollHeight; }
+
+    function updateIndicators(){ turnIndicator.textContent = game.turn === 'w' ? 'White' : 'Black'; statusIndicator.textContent = game.status.charAt(0).toUpperCase() + game.status.slice(1); }
+
+    function renderLegend(){ legendEl.innerHTML = ''; const order=['k','q','r','b','n','p']; order.forEach(type=>{
+      const whiteEntry = document.createElement('div'); whiteEntry.className='legend-item'; whiteEntry.innerHTML = `<img src="${pokemonImages.w[type]}" alt="${pokemonNames[type]}" /><div class="legend-text"><div class="title">${pokemonNames[type]}</div><div class="subtitle">White ${type.toUpperCase()}</div></div>`; legendEl.appendChild(whiteEntry);
+      const blackEntry = document.createElement('div'); blackEntry.className='legend-item'; blackEntry.innerHTML = `<img src="${pokemonImages.b[type]}" alt="Shiny ${pokemonNames[type]}" /><div class="legend-text"><div class="title">Shiny ${pokemonNames[type]}</div><div class="subtitle">Black ${type.toUpperCase()}</div></div>`; legendEl.appendChild(blackEntry);
+    }) }
+
+    // events
+    undoBtn.addEventListener('click', ()=>{ if(game.undo()){ selectedSquare=null; legalMoves=[]; renderBoard(); } });
+    flipBtn.addEventListener('click', ()=>{ boardFlipped = !boardFlipped; document.getElementById('boardContainer').classList.toggle('board-flip'); renderBoard(); });
+    restartBtn.addEventListener('click', ()=>{ if(confirm('Restart game?')){ game.reset(); selectedSquare=null; legalMoves=[]; renderBoard(); } });
+
+    // init
+    renderBoard(); renderLegend();
+  </script>
+</body>
+</html>
